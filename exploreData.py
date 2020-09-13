@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-Created on Thu Apr  2 21:22:15 2020
-
-@author: George (Zhizhuo) Yang
-
 This Python script read in multiple DataFrames given by Kamran and calculate
 new variables in new coordinate systems for our new experiments with PC.
+
+@author: George (Zhizhuo) Yang
 """
 
 import pandas as pd
@@ -33,11 +31,21 @@ sessionDict = pd.read_pickle(filePath + fileName + '.pickle')
 rawDataFrame = sessionDict['raw']
 processedDataFrame = sessionDict['processed']
 calibDataFrame = sessionDict['calibration']
-s1TrialInfo = sessionDict['trialInfo']
+trialInfo = sessionDict['trialInfo']
 frameRate = 75
 
 ### convert gaze vector and eye-to-ball vector from Cartesian coordinates to
 ### spherical coordinates
+
+# Mask out the trial data after passing plane
+numberTrials = len(trialInfo)
+isOrientValid = np.zeros((len(rawDataFrame),), dtype=bool)
+isVelocityValid = np.zeros((len(rawDataFrame),), dtype=bool)
+for i in range(numberTrials):
+    start_idx = trialInfo.loc[i, 'firstFrame'].values[0]
+    end_idx = trialInfo.loc[i, 'ballCrossingIndex'].values[0]
+    isOrientValid[start_idx:end_idx] = True
+    isVelocityValid[start_idx+1:end_idx] = True
 
 # Gaze vector in HCS
 rgp = processedDataFrame['rotatedGazePoint']
@@ -52,8 +60,8 @@ eih.columns = pd.MultiIndex.from_product([['EyeInHead'], eih.columns])
 eih_vel = pd.DataFrame({'AzVel': eih_az_vel, 'ElVel': eih_el_vel},  dtype=float)
 eih_vel.columns = pd.MultiIndex.from_product([['EyeInHead'], eih_vel.columns])
 EIHSpherical = pd.concat([eih, eih_vel], axis=1)
-EIHSpherical.boxplot(column=[['EyeInHead', 'Az'], ['EyeInHead','El']])
-EIHSpherical.boxplot(column=[['EyeInHead', 'AzVel'], ['EyeInHead','ElVel']])
+EIHSpherical.loc[isOrientValid].boxplot(column=[['EyeInHead', 'Az'], ['EyeInHead','El']], showfliers=False)
+EIHSpherical.loc[isVelocityValid].boxplot(column=[['EyeInHead', 'AzVel'], ['EyeInHead','ElVel']], showfliers=False)
 
 # Eye-to-ball vector in HCS
 rbs = processedDataFrame['rotatedBallOnScreen']
@@ -69,10 +77,9 @@ bih.columns = pd.MultiIndex.from_tuples(columns)
 bih_vel = pd.DataFrame({'AzVel': bih_az_vel, 'ElVel': bih_el_vel},  dtype=float)
 bih_vel.columns = pd.MultiIndex.from_product([['BallInHead'], bih_vel.columns])
 BIHSpherical = pd.concat([bih, bih_vel], axis=1)
-BIHSpherical.boxplot(column=[['BallInHead', 'Az'], ['BallInHead', 'El']])
-BIHSpherical.boxplot(column=[['BallInHead', 'AzVel'], ['BallInHead', 'ElVel']])
-#TODO filter the velocity data, make sure to exclude transition from end of one
-#     trail to the beginning of the next trail
+BIHSpherical.loc[isOrientValid].boxplot(column=[['BallInHead', 'Az'], ['BallInHead', 'El']], showfliers=False)
+BIHSpherical.loc[isVelocityValid].boxplot(column=[['BallInHead', 'AzVel'], ['BallInHead', 'ElVel']], showfliers=False)
+
 
 # BallOnRetina: ball position in Retina Frame of Reference (RFR/RCS)
 bor = bih.values - eih.values
@@ -82,8 +89,8 @@ bor.columns = pd.MultiIndex.from_product([['BallOnRetina'], bor.columns])
 bor_vel = pd.DataFrame(bor_vel, columns=['AzVel', 'ElVel'], dtype=float)
 bor_vel.columns = pd.MultiIndex.from_product([['BallOnRetina'], bor_vel.columns])
 BORSpherical = pd.concat([bor, bor_vel], axis=1)
-BORSpherical.boxplot(column=[['BallOnRetina', 'Az'], ['BallOnRetina', 'El']])
-BORSpherical.boxplot(column=[['BallOnRetina', 'AzVel'], ['BallOnRetina', 'ElVel']])
+BORSpherical.loc[isOrientValid].boxplot(column=[['BallOnRetina', 'Az'], ['BallOnRetina', 'El']], showfliers=False)
+BORSpherical.loc[isVelocityValid].boxplot(column=[['BallOnRetina', 'AzVel'], ['BallOnRetina', 'ElVel']], showfliers=False)
 
 # Ball angular size in degree
 ball2HeadVec = np.asarray(
@@ -92,6 +99,9 @@ ballDistancefromHead = np.sqrt(np.sum(np.power(ball2HeadVec, 2), axis=1))
 ballRadius = 0.045
 ballSizeDegs = np.arctan(ballRadius / ballDistancefromHead) / np.pi * 180
 loomingRate = (ballSizeDegs[1:] - ballSizeDegs[:-1]) * frameRate
+loomingRate = np.concatenate([[0], loomingRate])
+ballInfo = pd.DataFrame({'ballSizeDegs':ballSizeDegs, 'loomingRate': loomingRate}, dtype=float)
+ballInfo.columns = pd.MultiIndex.from_product([ballInfo.columns, ['']])
 
 # Paddle spherical position in HCS
 cycInverseMat = np.asarray(rawDataFrame['cycInverseMat'].values, dtype=float)
@@ -99,7 +109,7 @@ cycInverseMat = cycInverseMat.reshape((len(cycInverseMat), 4, 4))
 paddlePosXYZ = np.asarray(rawDataFrame['paddlePos'], dtype=float)
 paddlePosHomo = np.hstack([paddlePosXYZ, np.ones((len(paddlePosXYZ), 1))])
 paddleHCS_XYZW = np.asarray(
-    np.dot(cycInverseMat[i], paddlePosHomo[i]) for i in range(len(paddlePosXYZ)))
+    [np.dot(cycInverseMat[i], paddlePosHomo[i]) for i in range(len(paddlePosXYZ))])
 paddleHCS_XYZ = pd.DataFrame(paddleHCS_XYZW[:, :3], columns=[
                              'X', 'Y', 'Z'],  dtype=float)
 pih_az = np.arctan(paddleHCS_XYZ['X'] / paddleHCS_XYZ['Z']) / np.pi * 180
@@ -113,8 +123,8 @@ pih.columns = pd.MultiIndex.from_product([['PaddleInHead'], pih.columns])
 pih_vel = pd.DataFrame({'AzVel': pih_az_vel, 'ElVel': pih_el_vel},  dtype=float)
 pih_vel.columns = pd.MultiIndex.from_product([['PaddleInHead'], pih_vel.columns])
 PIHSpherical = pd.concat([pih, pih_vel], axis=1)
-PIHSpherical.boxplot(column=[['PaddleInHead', 'Az'], ['PaddleInHead','El']])
-PIHSpherical.boxplot(column=[['PaddleInHead', 'AzVel'], ['PaddleInHead','ElVel']])
+PIHSpherical.loc[isOrientValid].boxplot(column=[['PaddleInHead', 'Az'], ['PaddleInHead','El']], showfliers=False)
+PIHSpherical.loc[isVelocityValid].boxplot(column=[['PaddleInHead', 'AzVel'], ['PaddleInHead','ElVel']], showfliers=False)
 
 paddle2HeadVec = np.asarray(
     rawDataFrame['viewPos'].values - rawDataFrame['paddlePos'].values, dtype=float)
@@ -122,19 +132,59 @@ paddleDistancefromHead = np.sqrt(np.sum(np.power(paddle2HeadVec, 2), axis=1))
 
 # combine all individual DataFrames to a collection DataFrame which contains 
 # all the data we need for ML experiments
+dataValidity = pd.DataFrame({'isOrientValid':isOrientValid, 'isVelocityValid':isVelocityValid}, dtype=bool)
+dataValidity.columns = pd.MultiIndex.from_product([dataValidity.columns, ['']])
+collectDataFrame = pd.concat([EIHSpherical, BIHSpherical, PIHSpherical, BORSpherical, ballInfo, dataValidity], axis=1)
 
+### visualize a single trial of data to verify the calculations ###
+trial_num = 0
+start_idx = trialInfo.loc[trial_num, 'firstFrame'].values[0]
+end_idx = trialInfo.loc[trial_num, 'ballCrossingIndex'].values[0]
+# visualize orientation data
+eih_az_viz = collectDataFrame.EyeInHead.Az.values[start_idx:end_idx]
+eih_el_viz = collectDataFrame.EyeInHead.El.values[start_idx:end_idx]
+bih_az_viz = collectDataFrame.BallInHead.Az.values[start_idx:end_idx]
+bih_el_viz = collectDataFrame.BallInHead.El.values[start_idx:end_idx]
+bor_az_viz = collectDataFrame.BallOnRetina.Az.values[start_idx:end_idx]
+bor_el_viz = collectDataFrame.BallOnRetina.El.values[start_idx:end_idx]
+pih_az_viz = collectDataFrame.PaddleInHead.Az.values[start_idx:end_idx]
+pih_el_viz = collectDataFrame.PaddleInHead.El.values[start_idx:end_idx]
 
+fig = plt.figure(figsize=(8,8))
+plt.plot(eih_az_viz, eih_el_viz, 'ro', markersize=2, label='EIH')
+plt.plot(bih_az_viz, bih_el_viz, 'go', markersize=2, label='BIH')
+plt.plot(bor_az_viz, bor_el_viz, 'bo', markersize=2, label='BOR')
+plt.plot(pih_az_viz, pih_el_viz, 'yo', markersize=4, label='PIH')
+plt.xlabel('Azmuth')
+plt.ylabel('elevation')
+plt.grid(True)
+plt.axis('equal')
+legend = plt.legend(loc=[0.8,0.8], shadow=True, fontsize='small')# 'upper center'
+plt.show()
 
+#TODO fix PaddleInHead, maybe the coordinates are rotated by 90 degree?
 
+# visualize velocity data
+eih_az_vel_viz = collectDataFrame.EyeInHead.AzVel.values[start_idx+1:end_idx]
+eih_el_vel_viz = collectDataFrame.EyeInHead.ElVel.values[start_idx+1:end_idx]
+bih_az_vel_viz = collectDataFrame.BallInHead.AzVel.values[start_idx+1:end_idx]
+bih_el_vel_viz = collectDataFrame.BallInHead.ElVel.values[start_idx+1:end_idx]
+bor_az_vel_viz = collectDataFrame.BallOnRetina.AzVel.values[start_idx+1:end_idx]
+bor_el_vel_viz = collectDataFrame.BallOnRetina.ElVel.values[start_idx+1:end_idx]
+pih_az_vel_viz = collectDataFrame.PaddleInHead.AzVel.values[start_idx+1:end_idx]
+pih_el_vel_viz = collectDataFrame.PaddleInHead.ElVel.values[start_idx+1:end_idx]
 
-
-
-
-
-
-
-
-
+fig2 = plt.figure(figsize=(8,8))
+plt.plot(eih_az_vel_viz, eih_el_vel_viz, 'ro', markersize=2, label='EIH')
+plt.plot(bih_az_vel_viz, bih_el_vel_viz, 'go', markersize=2, label='BIH')
+plt.plot(bor_az_vel_viz, bor_el_vel_viz, 'bo', markersize=2, label='BOR')
+# plt.plot(pih_az_vel_viz, pih_el_vel_viz, 'yo', markersize=2, label='PIH')
+plt.xlabel('Azmuth Velocity')
+plt.ylabel('elevation Velocity')
+plt.grid(True)
+plt.axis('equal')
+legend = plt.legend(loc=[0.8,0.8], shadow=True, fontsize='small')# 'upper center'
+plt.show()
 
 
 
